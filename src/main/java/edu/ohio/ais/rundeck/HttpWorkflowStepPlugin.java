@@ -12,6 +12,8 @@ import com.dtolabs.rundeck.plugins.step.PluginStepContext;
 import com.dtolabs.rundeck.plugins.step.StepPlugin;
 import com.dtolabs.rundeck.plugins.util.DescriptionBuilder;
 import com.dtolabs.rundeck.plugins.util.PropertyBuilder;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import edu.ohio.ais.rundeck.util.OAuthClient;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -23,17 +25,25 @@ import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.config.SocketConfig;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.TrustStrategy;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.ssl.SSLContextBuilder;
 import org.apache.http.util.EntityUtils;
 
 import java.io.IOException;
+import java.nio.charset.UnsupportedCharsetException;
 import java.security.GeneralSecurityException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Main implementation of the plugin. This will handle fetching
@@ -41,6 +51,12 @@ import java.util.Map;
  */
 @Plugin(name = HttpWorkflowStepPlugin.SERVICE_PROVIDER_NAME, service = ServiceNameConstants.WorkflowStep)
 public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
+    public static final Map<String, ContentType> CONTENT_TYPES = Stream.of(ContentType.APPLICATION_JSON,
+            ContentType.APPLICATION_XML,
+            ContentType.TEXT_PLAIN,
+            ContentType.TEXT_HTML,
+            ContentType.TEXT_XML)
+            .collect(Collectors.toMap(ContentType::getMimeType, Function.identity()));
     private static final Log log = LogFactory.getLog(HttpWorkflowStepPlugin.class);
 
     /**
@@ -98,6 +114,21 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
                     .required(true)
                     .defaultValue("GET")
                     .values(HTTP_METHODS)
+                    .build())
+                .property(PropertyBuilder.builder()
+                        .string("content-type")
+                        .title("Content-Type")
+                        .description("The content type of the payload sent with the request")
+                        .required(false)
+                        .values(new ArrayList<>(CONTENT_TYPES.keySet()))
+                    .defaultValue(ContentType.APPLICATION_JSON.getMimeType())
+                    .build())
+                .property(PropertyBuilder.builder()
+                    .string("payload")
+                    .title("Payload")
+                    .description("Payload sent with the request")
+                    .renderingAsTextarea()
+                    .required(false)
                     .build())
                 .property(PropertyBuilder.builder()
                     .select("authentication")
@@ -270,6 +301,7 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
         // Parse out the options
         String remoteUrl = options.containsKey("remoteUrl") ? options.get("remoteUrl").toString() : null;
         String method = options.containsKey("method") ? options.get("method").toString() : null;
+        String payload = options.containsKey("payload") ? options.get("payload").toString() : null;
         String authentication = options.containsKey("authentication") ? options.get("authentication").toString() : AUTH_NONE;
         Integer timeout = options.containsKey("timeout") ? Integer.parseInt(options.get("timeout").toString()) : DEFAULT_TIMEOUT;
 
@@ -287,7 +319,7 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
             }
 
             authHeader = username + ":" + password;
-            
+
             //As per RFC2617 the Basic Authentication standard has to send the credentials Base64 encoded. 
             authHeader = "Basic " + com.dtolabs.rundeck.core.utils.Base64.encode(authHeader);
         } else if (authentication.equals(AUTH_OAUTH2)) {
@@ -343,6 +375,19 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
             authHeader = "Bearer " + accessToken;
         }
 
+        StringEntity entity = null;
+        if (payload != null) {
+            String contentType = (String) options.get("content-type");
+
+            try {
+                entity = new StringEntity(payload, CONTENT_TYPES.get(contentType));
+            }
+            catch (UnsupportedCharsetException ex) {
+                throw new StepException("There was a problem creating the payload with content-type " + contentType,
+                        StepFailureReason.ConfigurationFailure);
+            }
+        }
+
         // Setup the request and process it.
         RequestBuilder request = RequestBuilder.create(method)
                 .setUri(remoteUrl)
@@ -351,6 +396,10 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
                         .setConnectTimeout(timeout)
                         .setSocketTimeout(timeout)
                         .build());
+
+        if (entity != null) {
+            request.setEntity(entity);
+        }
 
         log.debug("Creating HTTP " + request.getMethod() + " request to " + request.getUri());
 
