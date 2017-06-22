@@ -12,8 +12,6 @@ import com.dtolabs.rundeck.plugins.step.PluginStepContext;
 import com.dtolabs.rundeck.plugins.step.StepPlugin;
 import com.dtolabs.rundeck.plugins.util.DescriptionBuilder;
 import com.dtolabs.rundeck.plugins.util.PropertyBuilder;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import edu.ohio.ais.rundeck.util.OAuthClient;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -37,7 +35,6 @@ import java.security.GeneralSecurityException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -51,12 +48,7 @@ import java.util.stream.Stream;
  */
 @Plugin(name = HttpWorkflowStepPlugin.SERVICE_PROVIDER_NAME, service = ServiceNameConstants.WorkflowStep)
 public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
-    public static final Map<String, ContentType> CONTENT_TYPES = Stream.of(ContentType.APPLICATION_JSON,
-            ContentType.APPLICATION_XML,
-            ContentType.TEXT_PLAIN,
-            ContentType.TEXT_HTML,
-            ContentType.TEXT_XML)
-            .collect(Collectors.toMap(ContentType::getMimeType, Function.identity()));
+
     private static final Log log = LogFactory.getLog(HttpWorkflowStepPlugin.class);
 
     /**
@@ -75,6 +67,16 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
     public static final String AUTH_NONE = "None";
     public static final String AUTH_BASIC = "Basic";
     public static final String AUTH_OAUTH2 = "OAuth 2.0";
+
+    /**
+     * Content-Type options for the request
+     */
+    public static final Map<String, ContentType> CONTENT_TYPES = Stream.of(ContentType.APPLICATION_JSON,
+            ContentType.APPLICATION_XML,
+            ContentType.TEXT_PLAIN,
+            ContentType.TEXT_HTML,
+            ContentType.TEXT_XML)
+            .collect(Collectors.toMap(ContentType::getMimeType, Function.identity()));
 
     /**
      * Synchronized map of all existing OAuth clients. This is indexed by
@@ -116,11 +118,11 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
                     .values(HTTP_METHODS)
                     .build())
                 .property(PropertyBuilder.builder()
-                        .string("content-type")
-                        .title("Content-Type")
-                        .description("The content type of the payload sent with the request")
-                        .required(false)
-                        .values(new ArrayList<>(CONTENT_TYPES.keySet()))
+                    .select("content-type")
+                    .title("Content-Type")
+                    .description("The content type of the payload sent with the request")
+                    .required(false)
+                    .values(new ArrayList<>(CONTENT_TYPES.keySet()))
                     .defaultValue(ContentType.APPLICATION_JSON.getMimeType())
                     .build())
                 .property(PropertyBuilder.builder()
@@ -301,7 +303,7 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
         // Parse out the options
         String remoteUrl = options.containsKey("remoteUrl") ? options.get("remoteUrl").toString() : null;
         String method = options.containsKey("method") ? options.get("method").toString() : null;
-        String payload = options.containsKey("payload") ? options.get("payload").toString() : null;
+        String payload = options.containsKey("payload") ? options.get("payload").toString() : "";
         String authentication = options.containsKey("authentication") ? options.get("authentication").toString() : AUTH_NONE;
         Integer timeout = options.containsKey("timeout") ? Integer.parseInt(options.get("timeout").toString()) : DEFAULT_TIMEOUT;
 
@@ -375,8 +377,17 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
             authHeader = "Bearer " + accessToken;
         }
 
+        // Setup the request and process it.
+        RequestBuilder request = RequestBuilder.create(method)
+                .setUri(remoteUrl)
+                .setConfig(RequestConfig.custom()
+                        .setConnectionRequestTimeout(timeout)
+                        .setConnectTimeout(timeout)
+                        .setSocketTimeout(timeout)
+                        .build());
+
         StringEntity entity = null;
-        if (payload != null) {
+        if (!payload.isEmpty()) {
             String contentType = (String) options.get("content-type");
 
             try {
@@ -387,15 +398,6 @@ public class HttpWorkflowStepPlugin implements StepPlugin, Describable {
                         StepFailureReason.ConfigurationFailure);
             }
         }
-
-        // Setup the request and process it.
-        RequestBuilder request = RequestBuilder.create(method)
-                .setUri(remoteUrl)
-                .setConfig(RequestConfig.custom()
-                        .setConnectionRequestTimeout(timeout)
-                        .setConnectTimeout(timeout)
-                        .setSocketTimeout(timeout)
-                        .build());
 
         if (entity != null) {
             request.setEntity(entity);
